@@ -1,0 +1,47 @@
+/*  Name: Po-Yu Huang
+    UID: 117684681
+    project: vesp 1.0 test-bench
+*/
+
+`include "Clock_Unit.v"
+`include "RISC_SPM.v"
+
+module test_RISC_SPM ();
+  reg rst;
+  wire clk;
+  parameter word_size = 16;
+  reg [16:0] k;
+
+  Clock_Unit M1 (clk);
+  RISC_SPM M2 (clk, rst);
+
+  wire [word_size-1:0] word0, word1, word2, word3, word4, word5;
+
+  assign word0 = M2.M2_SRAM.memory[0];
+  assign word1 = M2.M2_SRAM.memory[1];
+  assign word2 = M2.M2_SRAM.memory[2];
+  assign word3 = M2.M2_SRAM.memory[3];
+  assign word4 = M2.M2_SRAM.memory[4];
+  assign word5 = M2.M2_SRAM.memory[5];
+
+ initial #2800 $finish;
+ 
+// Initialize Memory
+
+initial begin
+  #2 rst = 0; for (k=0;k<=255;k=k+1)M2.M2_SRAM.memory[k] = 0; #10 rst = 1;
+end
+
+initial begin
+  $dumpfile("RISC_SPM.vcd");
+  $dumpvars();
+
+  #10
+  M2.M2_SRAM.memory[0] = 'h2000;		// Load 8  to RA
+  M2.M2_SRAM.memory[1] = 'h0008;    // 0000_0000_0000_1000
+  M2.M2_SRAM.memory[2] = 'h2001;		// Load 11 to RB
+  M2.M2_SRAM.memory[3] = 'h000B;		// 0000_0000_0000_1011
+  M2.M2_SRAM.memory[4] = 'h0000;    // Add RB to RA
+  M2.M2_SRAM.memory[5] = 'h7000;    // halt
+end 
+endmodule

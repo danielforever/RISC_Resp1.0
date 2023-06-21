@@ -1,0 +1,525 @@
+/*  Name: Po-Yu Huang
+    UID: 117684681
+    project: vesp 1.0 in RISC SPM architecture
+
+    RA:     16 bits (Implicit) Register A
+    RB:     16 bits (Implicit) Register B 
+    IX:     16 bits (Implicit) Refister IX
+    IR:     16 bits 
+    MAR:    12 bits
+    PC:     12 bits
+*/
+
+module RISC_SPM (clk, rst);
+
+  input clk, rst;
+
+  parameter word_size = 16;
+  parameter no_op_size = 12;
+  parameter Sel1_size = 3;
+  parameter Sel2_size = 2;
+  wire [Sel1_size-1: 0] Sel_Bus_1_Mux;
+  wire [Sel2_size-1: 0] Sel_Bus_2_Mux;
+
+  // Data Nets
+  wire zero;
+  wire [word_size-1: 0] instruction, address, Bus_1, mem_word, MDR;
+  wire [no_op_size-1: 0] MAR;
+  // Control Nets
+  wire Load_RA, Load_RB, Load_MDR, Load_MAR_Add_R, Write_PC, Load_RIX, Load_R3, Load_PC, Inc_PC, Load_IR;   
+  wire Load_Add_R, Load_Reg_Y, Load_Reg_Z, Reset;
+  wire write;
+ 
+  Processing_Unit M0_Processor (instruction, zero, address, Bus_1, mem_word, Load_RA, Load_RB, Load_MDR, Load_MAR_Add_R, Write_PC,
+    Load_RIX, Load_R3, Load_PC, Inc_PC, Sel_Bus_1_Mux, Load_IR, Load_Add_R, Load_Reg_Y, Load_Rst,
+    Load_Reg_Z, Sel_Bus_2_Mux, MAR, clk, rst, Reset, MDR);
+
+  Control_Unit M1_Controller (Load_RA, Load_RB, Load_MDR, Load_MAR_Add_R, Write_PC, Load_RIX, Load_R3, Load_PC, Inc_PC, Load_Rst, 
+    Sel_Bus_1_Mux, Sel_Bus_2_Mux, Load_IR, Load_Add_R, Load_Reg_Y, Load_Reg_Z, 
+    write, instruction, zero, MAR, clk, rst);
+
+  Memory_Unit M2_SRAM (
+    .data_out(mem_word), 
+    .data_in(Bus_1), 
+    .address(address),
+    .clk(clk),
+    .write(write));
+endmodule
+
+
+module Processing_Unit (instruction, Zflag, address, Bus_1, mem_word, Load_RA, Load_RB, Load_MDR, Load_MAR_Add_R, Write_PC, Load_RIX, 
+  Load_R3, Load_PC, Inc_PC, Sel_Bus_1_Mux, Load_IR, Load_Add_R, Load_Reg_Y, Load_Rst, Load_Reg_Z, 
+  Sel_Bus_2_Mux, MAR, clk, rst, Reset, MDR);
+
+  parameter word_size = 16;
+  parameter op_size = 4;
+  parameter Sel1_size = 3;
+  parameter Sel2_size = 2;
+  parameter np_op_size = 12;
+
+  output [word_size-1: 0] instruction, address, Bus_1, MDR;
+  output Zflag, Reset;
+
+  input [word_size-1: 0]  mem_word;
+  input Load_RA, Load_RB, Load_RIX, Load_R3, Load_PC, Load_MDR, Load_MAR_Add_R, Write_PC, Inc_PC;
+  input [Sel1_size-1: 0] 	Sel_Bus_1_Mux;
+  input [Sel2_size-1: 0] 	Sel_Bus_2_Mux;
+  input Load_IR, Load_Add_R, Load_Reg_Y, Load_Reg_Z, Load_Rst;
+  input clk, rst;
+  input [np_op_size-1:0] MAR, PC_count;
+
+  wire  Load_RA, Load_RB, Load_RIX, Load_R3;
+  wire  [word_size-1: 0] 	Bus_2;
+  wire  [word_size-1: 0] 	RA_out, RB_out, RIX_out, R3_out;
+  wire  [word_size-1: 0] 	Y_value, alu_out;
+  wire  alu_zero_flag;
+  wire  [op_size-1 : 0] 	opcode = instruction [word_size-1: word_size-op_size];
+
+  Register_Unit 		    RA 	(RA_out, Bus_2, Load_RA, clk, rst);
+  Register_Unit 		    RB 	(RB_out, Bus_2, Load_RB, clk, rst);
+  Register_Unit 		    RIX 	(RIX_out, Bus_2, Load_RIX, clk, rst);
+/*   Register_Unit 		    R3 	  (R3_out, Bus_2, Load_R3, clk, rst); */
+  Register_Unit 		    Reg_Y (Y_value, Bus_2, Load_Reg_Y, clk, rst);
+  D_flop 			          Reg_Z (Zflag, alu_zero_flag, Load_Reg_Z, clk, rst);
+  Address_Register 	    Add_R	(address, MDR, Bus_2, Load_Add_R, MAR, mem_word, Load_MDR, Load_MAR_Add_R, clk, rst);
+  Reset_Unit            reset (Reset, Load_Rst, clk, rst);
+  
+  Instruction_Register	IR	  (instruction, Bus_2, Load_IR, clk, rst);
+  Program_Counter 	    PC	  (PC_count, Bus_2, Load_PC, Inc_PC, MAR, Write_PC, clk, rst);
+  Multiplexer_5ch 		  Mux_1 (Bus_1, RA_out, RB_out, RIX_out, R3_out, PC_count, Sel_Bus_1_Mux);
+  Multiplexer_3ch 		  Mux_2	(Bus_2, alu_out, Bus_1, mem_word, Sel_Bus_2_Mux);
+  Alu_RISC 		          ALU	  (alu_zero_flag, alu_out, Y_value, Bus_1, opcode);
+endmodule 
+
+module Register_Unit (data_out, data_in, load, clk, rst);
+  parameter 	word_size = 16;
+  output      [word_size-1: 0] 	data_out;
+  input 	    [word_size-1: 0] 	data_in;
+  input 			load;
+  input 			clk, rst;
+  reg 	      [word_size-1: 0]	data_out;
+
+  always @ (posedge clk or negedge rst)
+    if (rst == 0) data_out <= 0; else if (load) data_out <= data_in;
+endmodule
+
+module D_flop (data_out, data_in, load, clk, rst);
+  output 		  data_out;
+  input 		  data_in;
+  input 		  load;
+  input 		  clk, rst;
+  reg 		    data_out;
+
+  always @ (posedge clk or negedge rst)
+    if (rst == 0) data_out <= 0; else if (load == 1)data_out <= data_in;
+endmodule
+
+ module Address_Register (data_out, mdr, data_in, load, mar, mem_word, Load_MDR, load_mar_add_r, clk, rst);
+  parameter   word_size = 16;
+  parameter   no_op_size = 12;
+  output      [word_size-1: 0] data_out, mdr;
+  input 	    [no_op_size-1: 0] 	mar;
+  input 	    [word_size-1: 0] 	data_in, mem_word;
+  input 			load, load_mar_add_r, Load_MDR, clk, rst;
+  reg 	      [word_size-1: 0]	data_out, mdr;
+
+  always @ (posedge clk or negedge rst)
+    if (rst == 0) begin 
+      data_out <= 0; 
+      mdr <= 0;
+    end
+    else if (load_mar_add_r) begin
+      data_out <= mar; 
+    end
+    else if (load) begin
+      data_out <= data_in; 
+    end
+    else if (Load_MDR) begin
+      mdr <= mem_word; 
+    end
+endmodule
+
+module Instruction_Register (IR, data_in, load, clk, rst);
+  parameter   word_size = 16; // maybe change to 12 bits
+  output      [word_size-1: 0] 	IR;
+  input 	    [word_size-1: 0] 	data_in;
+  input 			load;
+  input 			clk, rst;
+  reg 	      [word_size-1: 0]	IR;
+
+  always @ (posedge clk or negedge rst)
+    if (rst == 0) IR <= 0; else if (load) IR <= data_in; 
+endmodule
+
+module Program_Counter (PC, data_in, Load_PC, Inc_PC, mar, Write_PC, clk, rst);
+  parameter   word_size = 16; //change to 12 bits
+  parameter   no_op_size = 12;
+  output      [no_op_size-1: 0] 	PC;
+  input 	    [no_op_size-1: 0] 	mar;
+  input 	    [word_size-1: 0] 	data_in;
+  input 			Load_PC, Inc_PC, Write_PC;
+  input 			clk, rst;
+  reg 	      [no_op_size-1: 0]	PC;
+
+  always @ (posedge clk or negedge rst)
+    if (rst == 0) PC <= 0; else if (Load_PC) PC <= data_in[no_op_size-1: 0]; else if  (Inc_PC) PC <= PC +1;  else if  (Write_PC) PC <= mar;
+endmodule
+
+module Reset_Unit (data_out, load, clk, rst);
+  parameter   word_size = 16; //change to 12 bits
+  output 		  data_out;
+  input 		  load;
+  input 			clk, rst;
+  reg 		    data_out;
+
+  always @ (posedge clk or negedge rst)
+    if (load == 0) data_out <= 1; else if (load == 1) data_out <= 0;
+endmodule
+
+module Multiplexer_5ch (mux_out, data_a, data_b, data_c, data_d, data_e, sel);
+  parameter   word_size = 16;
+  parameter   op_size = 12;
+  output      [word_size-1: 0] 	mux_out;
+  input       [op_size-1: 0]  data_e;
+  input 	    [word_size-1: 0] 	data_a, data_b, data_c, data_d;
+  input 	    [2: 0] sel;
+ 
+  assign      mux_out = (sel == 0) 	? data_a: (sel == 1) ? data_b : (sel == 2) ? data_c: (sel == 3) 
+              ? data_d : (sel == 4) 
+              ? data_e : 'bx;
+endmodule
+
+module Multiplexer_3ch (mux_out, data_a, data_b, data_c, sel);
+  parameter 	word_size = 16;
+  output 		  [word_size-1: 0]	 mux_out;
+  input 		  [word_size-1: 0] 	data_a, data_b, data_c;
+  input 		  [1: 0] sel;
+
+  assign      mux_out = (sel == 0) ? data_a: (sel == 1) ? data_b : (sel == 2) ? data_c: 'bx;
+endmodule
+
+
+ 
+
+
+/*ALU Instruction		Action
+0  ADD	Opcode: 0000 	 Adds the datapaths to form data_1 + data_2.
+1  CMP	Opcode: 0001	 Takes the bitwise Boolean complement of data_1.
+2  LDA  Opcode: 0010   Load data into register.
+3  MOV  Opcode: 0011   Move data into other register.
+4  JMP  Opcode: 0100   Jmp to where PC is pointing at.
+5  JEZ  Opcode: 0101   If (A = 0)  PC = IR[4:15]
+6  JPS  Opcode: 0110   If (A > 0)  PC = IR[4:15]
+7  HLT  Opcode: 0111   Halt the program.
+*/
+  
+module Alu_RISC (alu_zero_flag, alu_out,data_2, data_1, sel);
+  parameter   word_size = 16;
+  parameter   op_size = 4;
+  // Opcodes
+  parameter   ADD 	= 4'b0000;
+  parameter   CMP 	= 4'b0001;
+  parameter   LDA 	= 4'b0010;
+  parameter   MOV 	= 4'b0011;
+  parameter   JMP 	= 4'b0100;
+  parameter   JEZ   = 4'b0101;
+  parameter   JPS   = 4'b0110;
+  parameter   HLT   = 4'b0111;
+
+  output 			alu_zero_flag;
+  output      [word_size-1: 0] 	alu_out;
+  input 	    [word_size-1: 0] 	data_1, data_2;
+  input 	    [op_size-1: 0] 	sel;
+  reg 	      [word_size-1: 0]	alu_out;
+
+  assign      alu_zero_flag = ~|alu_out; //For jump condition
+
+  always @ (sel or data_1 or data_2)  
+    case  (sel)
+      ADD:	alu_out = data_1 + data_2;  // Reg_Y + Bus_1
+      CMP:	alu_out = ~ data_1;	 // Gets data from Bus_1
+      LDA:  alu_out = data_1;	 // Gets data from Bus_1
+      HLT:  alu_out = 0;
+      default: 	alu_out = 0;
+    endcase 
+endmodule
+
+
+module Control_Unit (
+  Load_RA, Load_RB, Load_MDR, Load_MAR_Add_R, Write_PC,
+  Load_RIX, Load_R3, 
+  Load_PC, Inc_PC, Load_Rst, 
+  Sel_Bus_1_Mux, Sel_Bus_2_Mux,
+  Load_IR, Load_Add_R, Load_Reg_Y, Load_Reg_Z, 
+  write, instruction, zero, MAR, clk, rst);
+ 
+  parameter   word_size = 16, op_size = 4, state_size = 4, np_op_size = 12;
+  parameter   src_size = 2, dest_size = 2, Sel1_size = 3, Sel2_size = 2;
+
+  /* ********* HERE IS THE STATES FOR THE PROGRAM ******** */
+  parameter   fetch = 1, decode = 2, execute = 3, execute2 = 4;
+
+  // opcode
+  parameter   ADD = 0, CMP = 1, LDA = 2, MOV = 3, JMP = 4, JEZ = 5, JPS = 6, HLT =  7;
+
+  // fetch
+  parameter   S_idle = 0, S_fet1 = 1, S_fet2 = 2; 
+
+  // execute
+  parameter   S_exe1 = 0, S_add1 = 1, S_ld1 = 2, S_ld2 = 3, S_jmp1 = 9, S_jez1 = 10, S_jps1 = 11, S_hlt1 = 12, S_cmp1 = 8;
+  parameter   S_mov1 = 7, S_mov2 = 6, S_mov3 = 5, S_mov4 = 4;
+
+  // halt
+  parameter   S_halt = 5;
+  // Source and Destination Codes  
+  parameter   RA = 0, RB = 1, RIX = 2, R3 = 3;  
+
+  output   Load_RA, Load_RB, Load_RIX, Load_R3;
+  output   Load_PC, Inc_PC, Load_MDR, Load_MAR_Add_R, Write_PC, Load_Rst;
+  output   [Sel1_size-1:0] Sel_Bus_1_Mux;
+  output   Load_IR, Load_Add_R, Load_Hlt;
+  output   Load_Reg_Y, Load_Reg_Z;
+  output   [Sel2_size-1: 0] Sel_Bus_2_Mux;
+  output   write;
+  output   [np_op_size-1:0] MAR;
+  input    [word_size-1: 0] instruction;
+  input    zero;
+  input    clk, rst;
+ 
+  reg    [state_size-1: 0] state, sub_fetch_state, next_state, sub_fetch_next_state;
+  reg    [state_size-1: 0] sub_execute_state, sub_execute_next_state;
+  reg    [state_size-1: 0] sub_decode_state, sub_decode_next_state;
+  reg    Load_RA, Load_RB, Load_RIX, Load_R3, Load_PC, Inc_PC, Load_MDR, Load_MAR_Add_R, Write_PC, Load_Rst;
+  reg    Load_IR, Load_Add_R, Load_Reg_Y;
+  reg    Sel_ALU, Sel_Bus_1, Sel_Mem;
+  reg    Sel_RA, Sel_RB, Sel_RIX, Sel_R3, Sel_PC;
+  reg    Load_Reg_Z, write;
+  reg    err_flag;
+
+  wire   [op_size-1:0] opcode = instruction [word_size-1: word_size - op_size];
+  wire   [src_size-1: 0] src = instruction [src_size + dest_size -1: dest_size];
+  wire   [dest_size-1:0] dest = instruction [dest_size -1:0];
+  wire   [np_op_size-1:0] MAR = 0;
+ 
+  // Mux selectors
+  assign Sel_Bus_1_Mux[Sel1_size-1:0] = Sel_RA ? 0: Sel_RB ? 1: Sel_RIX ? 2: Sel_R3 ? 3: Sel_PC ? 4: 3'bx;  // 3-bits, sized number
+
+  assign Sel_Bus_2_Mux[Sel2_size-1:0] = Sel_ALU ? 0: Sel_Bus_1 ? 1: Sel_Mem ? 2: 2'bx;
+
+  always @ (posedge clk or negedge rst) begin: State_transitions
+    if (rst == 0) state <= S_idle; else state <= next_state; 
+    if (rst == 0) sub_fetch_state <= S_idle; else sub_fetch_state <= sub_fetch_next_state;
+    if (rst == 0) sub_decode_state <= S_idle; else sub_decode_state <= sub_decode_next_state;
+    if (rst == 0) sub_execute_state <= S_idle; else sub_execute_state <= sub_execute_next_state; end
+
+  always @ (state or opcode or zero or sub_fetch_state or sub_execute_state or sub_decode_state) begin: Output_and_next_state 
+    Sel_RA = 0; 	Sel_RB = 0;     	Sel_RIX = 0;    	Sel_R3 = 0;     	Sel_PC = 0;
+    Load_RA = 0; 	Load_RB = 0; 	Load_RIX = 0; 	Load_R3 = 0;	Load_PC = 0;
+    Load_MDR = 0; Load_MAR_Add_R = 0;
+
+    Load_IR = 0;	Load_Add_R = 0;	Load_Reg_Y = 0;	Load_Reg_Z = 0;
+    Inc_PC = 0;
+    Write_PC = 0;
+    Load_Rst = 0;
+    Sel_Bus_1 = 0; 
+    Sel_ALU = 0;
+    Sel_Mem = 0;
+    write = 0;
+    err_flag = 0;	// Used for de-bug in simulation		
+    next_state = state;
+    sub_fetch_next_state = sub_fetch_state;
+    sub_decode_next_state = sub_decode_state;
+
+    case  (state)	
+      S_idle:		begin
+        next_state = fetch;
+        sub_fetch_next_state = S_fet1;    
+      end
+
+      fetch: begin
+        case (sub_fetch_state)	
+          S_fet2:		begin 		
+            next_state = decode; 
+            sub_fetch_next_state = S_fet1; 
+            Sel_Mem = 1;   // Read input from memory
+            Load_IR = 1;   // Load the instruction from instruction register
+            Inc_PC = 1;    // Add 1 to program counter
+          end
+
+          S_fet1:		begin       	  	  	
+            sub_fetch_next_state = S_fet2; 
+            Sel_PC = 1;    // Select program counter 
+            Sel_Bus_1 = 1; // Load program counter
+            Load_Add_R = 1;// Send the address to the address register
+          end
+        endcase
+      end
+
+      decode: begin 	
+        case  (opcode) 
+          ADD: begin
+            next_state = execute;
+            sub_execute_next_state = S_add1; 
+          end // 0 ADD
+
+          CMP: begin
+            next_state = execute;
+            sub_execute_next_state = S_cmp1; 
+          end // 1 CMP
+
+          LDA: begin
+            next_state = execute;
+            sub_execute_next_state = S_ld1; 
+          end // 2 LDA
+
+          MOV: begin
+            next_state = execute;
+            sub_execute_next_state = S_mov1; 
+          end // 3 MOV
+
+          JMP: begin
+            next_state = execute;
+            sub_execute_next_state = S_jmp1; 
+          end // 4 JMP
+
+          JEZ:  begin
+            next_state = execute;
+            sub_execute_next_state = S_jez1;           
+          end // 5 JEZ
+
+          JPS:  begin
+            next_state = execute;
+            sub_execute_next_state = S_jps1;           
+          end // 6 JPS
+
+          HLT:  begin
+            next_state = execute;
+            sub_execute_next_state = S_hlt1;           
+          end // 7 HLT
+
+          default : next_state = S_halt;
+        endcase  // (opcode)
+      end 
+
+      execute:	begin
+        case  (sub_execute_next_state) 
+          S_exe1:  begin  
+            next_state = fetch;
+            Load_Reg_Z = 1;
+            Sel_ALU = 1; 
+            Sel_RA = 1; 
+            Load_RA = 1;
+          end
+
+          S_add1: begin 
+            sub_execute_next_state = S_exe1;
+            Sel_Bus_1 = 1;
+            Load_Reg_Y = 1;
+            Sel_RB = 1; 
+          end
+
+          S_ld2: begin 
+            next_state = fetch;
+            Inc_PC = 1;
+            Sel_Mem = 1;
+
+            case  (dest) 
+              RA: 		Load_RA = 1; 
+              RB: 		Load_RB = 1; 
+              default : 	err_flag = 1;
+            endcase  
+          end
+
+          S_ld1: begin 
+            sub_execute_next_state = S_ld2;
+            Sel_PC = 1;       // Load the program counter in   
+            Sel_Bus_1 = 1;    // Pass through the bus system
+            Load_Add_R = 1;   // Send the address into the address register
+          end
+
+          S_mov4: begin
+            next_state = fetch;
+            Sel_RA = 1;       // Select the source data in A register 
+            write = 1;        // Active write mode
+            Load_MAR_Add_R = 1;     // Active MAR address to write 
+            Sel_Mem = 1;      // Send into memory to write
+          end
+
+          S_mov3: begin  
+            sub_execute_next_state = S_mov4;
+            Sel_Mem = 1;       // Read the value in source address
+            Load_RA = 1;       // Send the source data to A register
+          end
+
+          S_mov2: begin  
+            sub_execute_next_state = S_mov3;
+			      Sel_Mem = 1;        // Read second line address in memory
+            Load_Add_R = 1;     // Take the source address
+          end
+
+          S_mov1: begin  
+            sub_execute_next_state = S_mov2;
+            Sel_PC = 1;         // Select PC to go to second line
+            Sel_Bus_1 = 1;      // Let PC go through bus
+            Load_Add_R = 1;     // Send the second line address Read the second line
+          end
+
+          S_cmp1: begin  
+            next_state = fetch;
+            Load_Reg_Z = 1;
+            Sel_Bus_1 = 1; 
+            Sel_ALU = 1;
+            Sel_RA = 1;
+            Load_RA = 1;
+          end
+
+          S_jmp1: begin  
+            next_state = fetch;      // go back to fetch step
+            Write_PC = 1;            // Change the value for the Program Counter by writing it over with MAR
+          end
+
+          S_jez1: begin  
+            next_state = fetch;      // go back to fetch step
+            Load_Reg_Z = 1;          // To triger the zero flag condition
+            if (zero == 1)  begin    // If condition to see whether the A register is 0
+              Write_PC = 1;          // Change the value for the Program Counter by writing it over with MAR
+            end
+          end
+
+          S_jps1: begin  
+            next_state = fetch;     // go back to fetch step
+            Load_Reg_Z = 1;         // To triger the zero flag condition
+            if (zero != 1)  begin   // If condition to see whether the A register is larger than 0
+              Write_PC = 1;         // Change the value for the Program Counter by writing it over with MAR
+            end
+          end
+
+          S_hlt1: begin  
+            sub_execute_next_state = S_hlt1;  // Just staying in halt state forever
+            Load_Rst = 1;                      // set reset to 1
+          end
+        endcase
+			end 
+		  default:		next_state = S_idle;
+    endcase    
+  end
+endmodule
+
+
+module Memory_Unit (data_out, data_in, address, clk, write);
+  parameter word_size = 16;
+  parameter memory_size = 256;
+
+  output    [word_size-1: 0] data_out;
+  input     [word_size-1: 0] data_in;
+  input     [word_size-1: 0] address;
+  input     clk, write;
+  reg       [word_size-1: 0] memory [memory_size-1: 0];
+
+  assign    data_out = memory[address];
+  
+  always @ (posedge clk)
+    if (write) memory[address] = data_in;
+    
+endmodule
+
